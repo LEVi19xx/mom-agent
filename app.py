@@ -257,27 +257,43 @@ label p, .stTextInput label, .stTextArea label { font-size:.84rem !important; fo
 <div class="steps"><span><b>1</b>Upload</span><span><b>2</b>Generate</span><span><b>3</b>Review &amp; edit</span><span><b>4</b>Download</span></div>
 """, unsafe_allow_html=True)
 
-DARK_CSS = """
-<style>
+DARK_RULES = """
 :root { --ink:#F4F4F5; --muted:#A1A1AA; --line:#27272F; --soft:#1C1C22; --bg:#0B0B0F; --surface:#14141A;
-        --label:#D4D4D8; --accent:#818CF8; --btnbg:#F4F4F5; --btnfg:#0B0B0F; }
+        --label:#D4D4D8; --accent:#818CF8; --btnbg:#F4F4F5; --btnfg:#0B0B0F; color-scheme: dark; }
 .stApp, .stApp p, .stApp li, .stApp label, .stApp h1, .stApp h2, .stApp h3 { color:var(--ink); }
 .stApp { background:var(--bg); }
 [data-testid="stFileUploader"] section { border-color:#3F3F46; }
 [data-testid="stFileUploader"] small { color:var(--muted); }
 [data-testid="stDataEditor"] { filter:invert(1) hue-rotate(180deg); }
 .stTextInput input, .stTextArea textarea { color:var(--ink) !important; }
-</style>
 """
 
-if "dark" not in st.session_state:
-    st.session_state["dark"] = st.query_params.get("theme") == "dark"
-_, tcol = st.columns([6, 2])
-with tcol:
-    dark = st.toggle("Dark mode", key="dark")
-if dark:
-    st.markdown(DARK_CSS, unsafe_allow_html=True)
+RESPONSIVE_CSS = """
+<style>
+@media (max-width: 640px) {
+  .block-container { padding: 1.4rem 1rem 4rem !important; }
+  .hero h1 { font-size: 1.9rem; }
+  .hero p { font-size: .95rem; }
+  .steps { gap: .9rem; margin: 1.2rem 0 1.1rem; padding-bottom: 1rem; }
+  .stTabs [data-baseweb="tab-list"] { gap: 1.1rem; overflow-x: auto; flex-wrap: nowrap; }
+  .stTabs [data-baseweb="tab"] { white-space: nowrap; }
+  div.stButton > button, div.stDownloadButton > button { width: 100%; padding: .85rem 1rem; }
+  [data-testid="stFileUploader"] section { padding: 1.1rem; }
+  [data-testid="stHorizontalBlock"] { gap: .6rem; }
+}
+@media (min-width: 641px) and (max-width: 1024px) { .block-container { max-width: 92%; } }
+</style>
+"""
+st.markdown(RESPONSIVE_CSS, unsafe_allow_html=True)
 
+# Theme: Auto follows the device/browser setting; Light/Dark force it.
+if "theme_mode" not in st.session_state:
+    st.session_state["theme_mode"] = {"dark": "Dark", "light": "Light"}.get(st.query_params.get("theme"), "Auto")
+mode = st.segmented_control("Theme", ["Auto", "Light", "Dark"], key="theme_mode", label_visibility="collapsed") or "Auto"
+if mode == "Dark":
+    st.markdown("<style>" + DARK_RULES + "</style>", unsafe_allow_html=True)
+elif mode == "Auto":
+    st.markdown("<style>@media (prefers-color-scheme: dark) {" + DARK_RULES + "}</style>", unsafe_allow_html=True)
 def build_md(m):
     out = [f"# {m.get('title') or 'Minutes of Meeting'}", f"**Date:** {m.get('date') or 'TBD'}", ""]
     if m.get("summary"):
