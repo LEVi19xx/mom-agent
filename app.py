@@ -1,4 +1,4 @@
-import os, io, re, json, time, tempfile, subprocess
+import os, io, re, csv, json, time, tempfile, subprocess
 import requests
 import streamlit as st
 from dotenv import load_dotenv
@@ -60,21 +60,33 @@ GROQ_URL = "https://api.groq.com/openai/v1"
 GROQ_WHISPER = "whisper-large-v3-turbo"
 GROQ_LLM = "openai/gpt-oss-120b"   # change if Groq retires it
 
-def groq_transcribe(path):
+def groq_transcribe(path, hint=""):
     with open(path, "rb") as fh:
         r = requests.post(
             f"{GROQ_URL}/audio/transcriptions",
             headers={"Authorization": f"Bearer {GROQ_KEY}"},
             files={"file": (os.path.basename(path), fh)},
-            data={"model": GROQ_WHISPER, "response_format": "text"},
+            data={"model": GROQ_WHISPER, "response_format": "text",
+                  **({"prompt": f"Names and terms: {hint}"} if hint else {})},
             timeout=600,
         )
     r.raise_for_status()
     return r.text
 
-def mom_from_text(transcript):
+def as_dict(x):
+    """The model sometimes wraps the JSON in a list; accept that, reject anything else."""
+    if isinstance(x, list) and x and isinstance(x[0], dict):
+        x = x[0]
+    if not isinstance(x, dict):
+        raise ValueError("AI returned an unexpected format")
+    return x
+
+def mom_from_text(transcript, lang="English", hint=""):
     """Text -> MOM JSON. Groq Llama first (fast), Gemini only as fallback."""
     prompt = PROMPT.replace("This is a meeting recording", "Below is a transcript of a meeting recording")
+    prompt = prompt.replace("Minutes of Meeting in English", f"Minutes of Meeting in {lang}")
+    if hint:
+        prompt += f"\nKnown names/terms (use these exact spellings): {hint}"
     prompt += "\n\nTRANSCRIPT:\n" + transcript
     try:
         r = requests.post(
@@ -85,12 +97,12 @@ def mom_from_text(transcript):
             timeout=120,
         )
         r.raise_for_status()
-        return json.loads(r.json()["choices"][0]["message"]["content"])
+        return as_dict(json.loads(r.json()["choices"][0]["message"]["content"]))
     except Exception:
         resp = client.models.generate_content(
             model=MODEL, contents=prompt,
             config={"response_mime_type": "application/json"})
-        return json.loads(resp.text)
+        return as_dict(json.loads(resp.text))
 
 CONVO_PROMPT = """Reformat this raw meeting transcript as a conversation, one speaker turn per line,
 like "Speaker 1: ...". Guess where the speaker changes from context (questions and answers,
@@ -131,17 +143,17 @@ def to_conversation(text):
     except Exception:
         return text
 
-def make_mom(path):
+def make_mom(path, lang="English", hint=""):
     if not GROQ_KEY:
         return make_mom_gemini_audio(path)   # no Groq key: old Gemini-only path
     t = time.time()
     small = compress(path)
     st.write(f"1. Compress: {time.time()-t:.0f}s ({os.path.getsize(path)/1e6:.1f}MB -> {os.path.getsize(small)/1e6:.1f}MB)")
     t = time.time()
-    text = groq_transcribe(small)
+    text = groq_transcribe(small, hint)
     st.write(f"2. Groq transcript: {time.time()-t:.0f}s")
     t = time.time()
-    mom = mom_from_text(text)
+    mom = mom_from_text(text, lang, hint)
     st.write(f"3. MOM from text: {time.time()-t:.0f}s")
     t = time.time()
     mom["transcript"] = to_conversation(text.strip())
@@ -266,6 +278,40 @@ with tcol:
 if dark:
     st.markdown(DARK_CSS, unsafe_allow_html=True)
 
+def build_md(m):
+    out = [f"# {m.get('title') or 'Minutes of Meeting'}", f"**Date:** {m.get('date') or 'TBD'}", ""]
+    if m.get("summary"):
+        out += ["## Summary", m["summary"], ""]
+    for sec in ["attendees", "agenda", "discussion", "decisions"]:
+        out += [f"## {sec.capitalize()}"] + [f"- {x}" for x in m.get(sec, [])] + [""]
+    out += ["## Action Items", "| Task | Owner | Deadline |", "|---|---|---|"]
+    out += [f"| {a.get('task','')} | {a.get('owner','TBD')} | {a.get('deadline','TBD')} |" for a in m.get("action_items", [])]
+    if m.get("transcript"):
+        out += ["", "## Transcript", m["transcript"]]
+    return "\n".join(out)
+
+def build_csv(m):
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Task", "Owner", "Deadline"])
+    for a in m.get("action_items", []):
+        w.writerow([a.get("task", ""), a.get("owner", "TBD"), a.get("deadline", "TBD")])
+    return buf.getvalue().encode("utf-8-sig")   # BOM so Excel opens it correctly
+
+def build_email(m):
+    lines_ = [f"Subject: Minutes of Meeting – {m.get('title') or 'Meeting'} ({m.get('date') or 'TBD'})", "",
+              "Hi all,", "", "Here is a summary of our meeting.", ""]
+    if m.get("summary"):
+        lines_ += [m["summary"], ""]
+    if m.get("decisions"):
+        lines_ += ["Decisions:"] + [f"- {x}" for x in m["decisions"]] + [""]
+    if m.get("action_items"):
+        lines_ += ["Action items:"] + [
+            f"- {a.get('task','')} (Owner: {a.get('owner','TBD')}, Due: {a.get('deadline','TBD')})"
+            for a in m["action_items"]] + [""]
+    lines_ += ["Please reply if I missed or got anything wrong.", "", "Thanks!"]
+    return "\n".join(lines_)
+
 def lines(v):
     return "\n".join(str(x) for x in (v or []))
 
@@ -274,6 +320,12 @@ def to_list(s, sep="\n"):
 
 f = st.file_uploader("Upload recording", type=["mp3", "wav", "m4a", "mp4"], label_visibility="collapsed")
 
+with st.expander("Options (optional)"):
+    c1, c2 = st.columns(2)
+    lang = c1.selectbox("Write the minutes in", ["English", "Tagalog", "Taglish"])
+    hint = c2.text_input("Names and terms in this meeting", placeholder="e.g. Maria Santos, Juan Dela Cruz, Mabuhay App")
+    st.caption("Names help the AI spell people and projects correctly in the transcript and minutes.")
+
 if f and st.button("Generate minutes", type="primary", width="stretch"):
     suffix = os.path.splitext(f.name)[1]
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -281,7 +333,7 @@ if f and st.button("Generate minutes", type="primary", width="stretch"):
         path = tmp.name
     with st.status("Generating your minutes...", expanded=True) as status:
         try:
-            st.session_state["mom"] = make_mom(path)
+            st.session_state["mom"] = make_mom(path, lang, hint)
             st.session_state["gen"] = st.session_state.get("gen", 0) + 1
             status.update(label="Done! Review and edit below.", state="complete", expanded=False)
         except Exception as e:
@@ -293,7 +345,7 @@ if mom:
     g = st.session_state.get("gen", 0)
     st.info("Review and edit anything below. Your changes go into the downloaded file.", icon="✏️")
 
-    t1, t2, t3, t4 = st.tabs(["Overview", "Discussion", "Decisions & Actions", "Transcript"])
+    t1, t2, t3, t4, t5 = st.tabs(["Overview", "Discussion", "Decisions & Actions", "Transcript", "Follow-up email"])
 
     with t1:
         title = st.text_input("Meeting title", mom.get("title") or "", key=f"title{g}")
@@ -332,6 +384,15 @@ if mom:
                          if str(r.get("task") or "").strip()],
         "transcript": transcript if mom.get("transcript") else "",
     }
+    with t5:
+        st.markdown('<div class="hint">A ready-to-send recap built from your edits. Use the copy icon at the top right of the box.</div>', unsafe_allow_html=True)
+        st.code(build_email(edited), language=None, wrap_lines=True)
+
     st.download_button("Download .docx", build_docx(edited), file_name="MOM.docx",
                        type="primary", width="stretch",
                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    d1, d2, d3 = st.columns(3)
+    d1.download_button("Markdown (.md)", build_md(edited), file_name="MOM.md", width="stretch")
+    d2.download_button("Action items (.csv)", build_csv(edited), file_name="action_items.csv", width="stretch")
+    d3.download_button("Transcript (.txt)", edited["transcript"] or "", file_name="transcript.txt", width="stretch",
+                       disabled=not edited["transcript"])
