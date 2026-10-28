@@ -1,0 +1,11 @@
+:root { --ink:#F4F4F5; --muted:#A1A1AA; --line:#2A2A33; --soft:#1E1E25; --bg:#0B0B0F; --surface:#14141A; --label:#D4D4D8;
+        --btnbg:#F4F4F5; --btnfg:#0B0B0F; --accent:#818CF8; color-scheme:dark; }
+.stApp, .stApp p, .stApp li, .stApp label, .stApp h1, .stApp h2, .stApp h3 { color:var(--ink); }
+[data-testid="stMarkdownContainer"] { color:var(--ink); }
+.intro p, .note, .hint, .card-h span.sub, .stat span, .stepper .st { color:var(--muted) !important; }
+.stepper .st.active, .stepper .st.done { color:var(--ink) !important; }
+[data-testid="stFileUploader"] section { border-color:#3F3F46; }
+[data-testid="stFileUploader"] small, [data-testid="stFileUploaderDropzoneInstructions"], [data-testid="stFileUploaderDropzoneInstructions"] * { color:var(--muted) !important; }
+[data-testid="stFileChip"], [data-testid="stFileChip"] * { color:var(--ink) !important; }
+[data-testid="stFileChip"] small, [data-testid="stFileChip"] small * { color:var(--muted) !important; }
+[data-testid="stDataFrame"] { filter:invert(1) hue-rotate(180deg); border:1px solid #D8D8D0 !important; }
