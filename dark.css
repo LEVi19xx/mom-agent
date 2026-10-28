@@ -8,4 +8,5 @@
 [data-testid="stFileUploader"] small, [data-testid="stFileUploaderDropzoneInstructions"], [data-testid="stFileUploaderDropzoneInstructions"] * { color:var(--muted) !important; }
 [data-testid="stFileChip"], [data-testid="stFileChip"] * { color:var(--ink) !important; }
 [data-testid="stFileChip"] small, [data-testid="stFileChip"] small * { color:var(--muted) !important; }
+.stepper .st.done i { color:#0B0B0F !important; }
 [data-testid="stDataFrame"] { filter:invert(1) hue-rotate(180deg); border:1px solid #D8D8D0 !important; }

@@ -8,11 +8,21 @@ from google import genai
 from google.genai import errors
 
 import importlib
-import docx_builder
-import handbook as hb
-importlib.reload(docx_builder)   # always use the latest Word template code, never a stale cached copy
-importlib.reload(hb)
-from docx_builder import build_docx
+import sys
+
+
+def _fresh(name):
+    """Import one of our own modules and always re-read it from disk, so a long-running server never uses a stale
+    cached copy. Order matters: modules that import from another one must be loaded after it is refreshed."""
+    mod = sys.modules.get(name)
+    return importlib.reload(mod) if mod else importlib.import_module(name)
+
+
+docx_builder = _fresh("docx_builder")
+hb = _fresh("handbook")
+preview = _fresh("preview")   # imports from docx_builder, so it comes after it
+build_docx = docx_builder.build_docx
+preview_html = preview.preview_html
 
 load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
@@ -579,12 +589,15 @@ if mom:
 
     # ------------------------------------------------------------ 4: download
     with st.container(key="card-download"):
-        card_head("4", "Download", "The Word file uses the company template with letterhead and numbered sections.")
+        card_head("4", "Preview & download", "Check the document first, then download the Word file.")
         with_tr = st.checkbox("Attach the conversation transcript at the end of the Word file", value=bool(edited["transcript"]),
                               disabled=not edited["transcript"])
         use_sig = st.checkbox("Place my e-signature above my name under 'Prepared By'", value=True, disabled=not sig_bytes,
                               help=None if sig_bytes else "Upload your e-signature in step 2 to enable this.")
         edited["signature"] = sig_bytes if (sig_bytes and use_sig) else None
+        st.markdown('<div class="hint">Preview. This is how your Word file will look. Spacing and fonts can differ a little in Word.</div>',
+                    unsafe_allow_html=True)
+        st.markdown(preview_html(edited, include_transcript=with_tr), unsafe_allow_html=True)
         st.download_button("Download Word file (.docx)", build_docx(edited, include_transcript=with_tr),
                            file_name="Minutes of the Meeting.docx", type="primary", width="stretch",
                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")

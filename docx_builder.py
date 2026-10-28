@@ -185,6 +185,16 @@ def _trim_signature(blob):
         return blob   # Pillow missing or unreadable image: use it as it is
 
 
+SIG_MAX_W, SIG_MAX_H = 1.2, 0.46   # inches, applied after the empty margins around the signature are trimmed
+
+
+def signature_size(blob):
+    """(width, height) in inches for a trimmed signature image. Also used by the on-screen preview."""
+    img = Image.from_blob(blob)
+    scale = min(SIG_MAX_W / (img.px_width / 96), SIG_MAX_H / (img.px_height / 96), 12)
+    return img.px_width / 96 * scale, img.px_height / 96 * scale
+
+
 def _float_picture(par, blob, width_in, x_in, y_in):
     """Insert a picture that floats behind the text (so a white photo background never hides the name), positioned relative to the paragraph."""
     run = par.add_run()
@@ -212,11 +222,7 @@ def _signature(d, m):
     name = _para(d, pb.get("name") or "______________________", after=0, before=14, keep_next=True)
     if sig:
         try:
-            img = Image.from_blob(sig)
-            max_w, max_h = 1.2, 0.46   # inches, after the empty margins are trimmed
-            scale = min(max_w / (img.px_width / 96), max_h / (img.px_height / 96), 12)
-            w_in = img.px_width / 96 * scale
-            h_in = img.px_height / 96 * scale
+            w_in, h_in = signature_size(sig)
             overlap = min(0.24, h_in * 0.25)   # how far the signature dips onto the printed name
             name.paragraph_format.space_before = Pt(max(14, (h_in - overlap) * 72))
             _float_picture(name, sig, w_in, x_in=0.1, y_in=0)   # offset is measured from the top of the spacing above the name
