@@ -127,6 +127,20 @@ def compress(path):
         return path   # ffmpeg missing/failed: use original
 
 
+def split_audio(path, limit_mb=24, seg_seconds=1200):
+    """Return [path] if it is small enough for one transcription call, else a list of ~20 minute pieces."""
+    if os.path.getsize(path) <= limit_mb * 1e6:
+        return [path]
+    pattern = path + ".part%03d.mp3"
+    try:
+        subprocess.run(["ffmpeg", "-y", "-i", path, "-f", "segment", "-segment_time", str(seg_seconds),
+                        "-c", "copy", pattern], check=True, capture_output=True)
+    except Exception:
+        return [path]
+    parts = sorted(str(p) for p in Path(path).parent.glob(Path(path).name + ".part*.mp3") if p.stat().st_size > 20_000)
+    return parts or [path]   # tiny leftover slivers are dropped: the transcription service rejects them
+
+
 def make_mom_gemini_audio(path, kind="general"):
     path = compress(path)
     f = client.files.upload(file=path)
@@ -156,16 +170,22 @@ GROQ_WHISPER = "whisper-large-v3-turbo"
 GROQ_LLM = "openai/gpt-oss-120b"   # change if Groq retires it
 
 
-def groq_transcribe(path, hint=""):
-    with open(path, "rb") as fh:
-        r = requests.post(
-            f"{GROQ_URL}/audio/transcriptions",
-            headers={"Authorization": f"Bearer {GROQ_KEY}"},
-            files={"file": (os.path.basename(path), fh)},
-            data={"model": GROQ_WHISPER, "response_format": "text",
-                  **({"prompt": f"Names and terms: {hint}"} if hint else {})},
-            timeout=600,
-        )
+def groq_transcribe(path, hint="", tries=4):
+    for _ in range(tries):
+        with open(path, "rb") as fh:
+            r = requests.post(
+                f"{GROQ_URL}/audio/transcriptions",
+                headers={"Authorization": f"Bearer {GROQ_KEY}"},
+                files={"file": (os.path.basename(path), fh)},
+                data={"model": GROQ_WHISPER, "response_format": "text",
+                      **({"prompt": f"Names and terms: {hint}"} if hint else {})},
+                timeout=600,
+            )
+        if r.status_code == 429:   # free-tier audio limit per minute/hour: wait a bit and try again
+            m = re.search(r"try again in (?:(\d+)m)?([\d.]+)s", r.text)
+            time.sleep(min((int(m.group(1) or 0) * 60 + float(m.group(2))) + 1 if m else 30, 120))
+            continue
+        break
     r.raise_for_status()
     return r.text
 
@@ -259,10 +279,11 @@ def make_mom(path, lang="English", hint="", kind="general"):
         return normalize_mom(make_mom_gemini_audio(path, kind), kind)   # no Groq key: Gemini-only path
     t = time.time()
     small = compress(path)
-    st.write(f"1. Compress: {time.time()-t:.0f}s ({os.path.getsize(path)/1e6:.1f}MB -> {os.path.getsize(small)/1e6:.1f}MB)")
+    st.write(f"1. Audio extracted: {time.time()-t:.0f}s ({os.path.getsize(path)/1e6:.1f}MB -> {os.path.getsize(small)/1e6:.1f}MB)")
     t = time.time()
-    text = groq_transcribe(small, hint)
-    st.write(f"2. Transcript: {time.time()-t:.0f}s")
+    parts = split_audio(small)   # Groq accepts at most ~25MB per file, so long recordings go in pieces
+    text = "\n".join(groq_transcribe(p, hint) for p in parts)
+    st.write(f"2. Transcript: {time.time()-t:.0f}s" + (f" ({len(parts)} parts)" if len(parts) > 1 else ""))
     t = time.time()
     mom = normalize_mom(mom_from_text(text, lang, hint, kind), kind)
     st.write(f"3. Minutes: {time.time()-t:.0f}s")
@@ -466,7 +487,7 @@ with st.expander("Recording & details", expanded=not mom) if mom else st.contain
         if go and f:
             suffix = os.path.splitext(f.name)[1]
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                tmp.write(f.read())
+                tmp.write(f.getbuffer())   # no second in-memory copy: big videos can be hundreds of MB
                 path = tmp.name
             with status_slot:
                 with st.status("Generating your minutes...", expanded=True) as status:
